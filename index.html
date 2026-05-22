@@ -24,7 +24,6 @@
             margin: 0 auto;
         }
 
-        /* 主卡片 */
         .hero-card {
             background: rgba(255, 252, 240, 0.97);
             border-radius: 48px;
@@ -62,7 +61,6 @@
             background: linear-gradient(90deg, #ffdebc, #ffc489, #ffdebc);
         }
 
-        /* 表單區域 */
         .form-grid {
             display: flex;
             flex-direction: column;
@@ -123,7 +121,6 @@
             box-shadow: 0 10px 20px rgba(211,84,0,0.25);
         }
 
-        /* 雙層過濾器 */
         .filters-section {
             display: flex;
             flex-wrap: wrap;
@@ -166,7 +163,6 @@
             background: #ffe2cd;
         }
 
-        /* 心情卡片串流 */
         .stream {
             display: flex;
             flex-direction: column;
@@ -332,7 +328,6 @@
 </head>
 <body>
 <div class="container">
-    <!-- 標題＋表單 -->
     <div class="hero-card">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
             <h1>☀️ 心情打卡牆 · 每日心晴</h1>
@@ -362,7 +357,6 @@
         </div>
     </div>
 
-    <!-- 雙重過濾器: 狀態 + 分類 -->
     <div class="filters-section">
         <div class="filter-group">
             <span style="font-size:0.8rem; font-weight:600;">📌 狀態：</span>
@@ -381,7 +375,6 @@
         </div>
     </div>
 
-    <!-- 心情打卡串流 -->
     <div id="moodStream" class="stream">
         <div class="empty-state">💭 還沒有任何心情打卡，寫下今天的故事吧～</div>
     </div>
@@ -389,26 +382,13 @@
 </div>
 
 <script>
-    // ===================== DATA CONTRACT =====================
-    // 系統名稱：心情打卡牆
-    // 資料主體：心情打卡
-    // 每筆 record 欄位說明：
-    // - id: string, 唯一識別 (用於更新)
-    // - createdAt: ISO 日期字串，建立時間 (排序用，最新在上)
-    // - status: 'active' | 'done' (active: 當下心情, done: 已沉澱)
-    // - content: string, 心情描述，必填
-    // - category: '開心' | '平靜' | '疲憊' | '焦慮' | '感動'
-    // - note: string, 補充備註，可選
-    // - likes: number, 預設0，可+1增加共鳴
-    //
-    // 功能：表單新增、卡片顯示、+1按讚、切換狀態、狀態過濾＋心情分類過濾、
-    //       localStorage儲存 (key=records)，刷新頁面資料存在。
-    // 核心函式: createRecord, saveData, loadData, updateRecord, renderList
+    // ===================== BACKEND CONNECTOR =====================
+    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyeudI-5uxSFxeAIcsfatD3XkB7n3IDlCDhaqajpd8DsgN5KknEA12zHy9DmdYPkqux/exec";
 
-    // ---------- 全域變數 ----------
-    let records = [];                         // 所有心情打卡
-    let currentStatusFilter = 'all';         // 'all', 'active', 'done'
-    let currentCategoryFilter = 'all';       // 'all', '開心','平靜','疲憊','焦慮','感動'
+    // ===================== DATA CONTRACT =====================
+    let records = [];
+    let currentStatusFilter = 'all';
+    let currentCategoryFilter = 'all';
 
     const streamContainer = document.getElementById('moodStream');
     const submitBtn = document.getElementById('submitBtn');
@@ -416,13 +396,51 @@
     const categorySelect = document.getElementById('moodCategory');
     const noteInput = document.getElementById('moodNote');
 
-    // ========== 核心功能 (完全符合規範) ==========
+    function normalizeRecord(record) {
+        return {
+            id: record.id || record.ID || "",
+            createdAt: record.createdAt || record.CreatedAt || new Date().toISOString(),
+            status: (record.status === 'active' || record.status === 'done') ? record.status : (record.Status === 'active' || record.Status === 'done') ? record.Status : 'active',
+            content: record.content || record.Content || "",
+            category: ['開心', '平靜', '疲憊', '焦慮', '感動'].includes(record.category) ? record.category : (['開心', '平靜', '疲憊', '焦慮', '感動'].includes(record.Category) ? record.Category : '開心'),
+            note: record.note || record.Note || "",
+            likes: typeof record.likes === 'number' ? record.likes : (typeof record.Likes === 'number' ? record.Likes : 0)
+        };
+    }
 
-    /**
-     * 1. createRecord(formData)
-     * @param {Object} formData 包含 content, category, note
-     * @returns {Object} 新建立的心情打卡 record
-     */
+    async function syncToSheet(payload) {
+        try {
+            const response = await fetch(APPS_SCRIPT_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            if (!data.ok) {
+                console.warn("Sheet sync failed:", data.error);
+            }
+            return data;
+        } catch (error) {
+            console.error("Sheet sync network error:", error);
+            return { ok: false, error: error.message };
+        }
+    }
+
+    async function fetchRecordsFromSheet() {
+        try {
+            const response = await fetch(APPS_SCRIPT_URL);
+            const data = await response.json();
+            if (data.ok && Array.isArray(data.records)) {
+                return data.records.map(normalizeRecord);
+            } else {
+                throw new Error(data.error || "Invalid sheet response");
+            }
+        } catch (error) {
+            console.error("Failed to fetch from sheet:", error);
+            throw error;
+        }
+    }
+
     function createRecord(formData) {
         const { content, category, note } = formData;
         const now = new Date();
@@ -438,21 +456,11 @@
         };
     }
 
-    /**
-     * 2. saveData(record)
-     * 新增一筆 record 到 records 陣列最前方 (最新顯示在最上面)
-     * 並寫入 localStorage
-     */
     function saveData(record) {
-        records.unshift(record);      // 最新打卡在最上方
+        records.unshift(record);
         persistToLocalStorage();
     }
 
-    /**
-     * 3. loadData()
-     * 從 localStorage 讀取 records，若無資料或格式錯誤回傳 []
-     * 確保每筆都有必要欄位
-     */
     function loadData() {
         const stored = localStorage.getItem('records');
         if (stored) {
@@ -460,16 +468,7 @@
                 const parsed = JSON.parse(stored);
                 if (Array.isArray(parsed)) {
                     records = parsed.filter(item => item && typeof item === 'object' && item.id);
-                    // 資料正規化 (兼容舊版)
-                    records = records.map(r => ({
-                        id: r.id,
-                        createdAt: r.createdAt || new Date().toISOString(),
-                        status: (r.status === 'active' || r.status === 'done') ? r.status : 'active',
-                        content: r.content || '（沒有描述）',
-                        category: ['開心', '平靜', '疲憊', '焦慮', '感動'].includes(r.category) ? r.category : '開心',
-                        note: r.note || '',
-                        likes: typeof r.likes === 'number' ? r.likes : 0
-                    }));
+                    records = records.map(r => normalizeRecord(r));
                 } else {
                     records = [];
                 }
@@ -477,16 +476,11 @@
                 records = [];
             }
         } else {
-            records = [];   // 完全無示範資料
+            records = [];
         }
         return records;
     }
 
-    /**
-     * 4. updateRecord(id, changes)
-     * 更新指定 record 的屬性 (例如 likes, status)
-     * @returns {boolean} 是否更新成功
-     */
     function updateRecord(id, changes) {
         const index = records.findIndex(rec => rec.id === id);
         if (index === -1) return false;
@@ -495,10 +489,6 @@
         return true;
     }
 
-    /**
-     * 5. renderList(recordsToShow)
-     * 根據傳入的 records 陣列繪製卡片 (顯示於頁面)
-     */
     function renderList(recordsToShow) {
         if (!streamContainer) return;
         if (!recordsToShow.length) {
@@ -506,7 +496,6 @@
             return;
         }
 
-        // 按照 createdAt 最新在上排序 (再次確保)
         const sorted = [...recordsToShow].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
         const cardsHTML = sorted.map(record => {
@@ -516,7 +505,6 @@
             const toggleBtnText = isDone ? '↻ 恢復 active' : '✓ 標記沉澱';
             const formattedDate = new Date(record.createdAt).toLocaleString('zh-TW', { hour12: false });
             
-            // 分類emoji
             let catEmoji = '';
             if (record.category === '開心') catEmoji = '😊';
             else if (record.category === '平靜') catEmoji = '🍃';
@@ -550,10 +538,9 @@
         }).join('');
 
         streamContainer.innerHTML = cardsHTML;
-        attachCardEvents();   // 動態按鈕事件委派
+        attachCardEvents();
     }
 
-    // 防 XSS
     function escapeHtml(str) {
         if (!str) return '';
         return str.replace(/[&<>]/g, function(m) {
@@ -564,15 +551,13 @@
         });
     }
 
-    // 事件委派處理 +1 及 toggle status
     function attachCardEvents() {
         if (!streamContainer) return;
         streamContainer.removeEventListener('click', globalClickHandler);
         streamContainer.addEventListener('click', globalClickHandler);
     }
 
-    function globalClickHandler(e) {
-        // +1 按鈕邏輯
+    async function globalClickHandler(e) {
         const likeBtn = e.target.closest('.btn-like');
         if (likeBtn && likeBtn.getAttribute('data-like-id')) {
             const id = likeBtn.getAttribute('data-like-id');
@@ -580,12 +565,12 @@
             if (targetRecord) {
                 const newLikes = (targetRecord.likes || 0) + 1;
                 updateRecord(id, { likes: newLikes });
-                applyFiltersAndRender();   // 刷新畫面
+                await syncToSheet({ action: "update", id, changes: { likes: newLikes } });
+                applyFiltersAndRender();
             }
             e.preventDefault();
             return;
         }
-        // 切換狀態按鈕
         const toggleBtn = e.target.closest('.btn-status');
         if (toggleBtn && toggleBtn.getAttribute('data-toggle-id')) {
             const id = toggleBtn.getAttribute('data-toggle-id');
@@ -593,6 +578,7 @@
             if (targetRecord) {
                 const newStatus = targetRecord.status === 'active' ? 'done' : 'active';
                 updateRecord(id, { status: newStatus });
+                await syncToSheet({ action: "update", id, changes: { status: newStatus } });
                 applyFiltersAndRender();
             }
             e.preventDefault();
@@ -600,35 +586,28 @@
         }
     }
 
-    // 持久化 localStorage (key='records')
     function persistToLocalStorage() {
         localStorage.setItem('records', JSON.stringify(records));
     }
 
-    // 根據目前的 statusFilter + categoryFilter 取得過濾後的資料
     function getFilteredRecords() {
         let filtered = [...records];
-        // 狀態過濾
         if (currentStatusFilter !== 'all') {
             filtered = filtered.filter(rec => rec.status === currentStatusFilter);
         }
-        // 分類過濾
         if (currentCategoryFilter !== 'all') {
             filtered = filtered.filter(rec => rec.category === currentCategoryFilter);
         }
         return filtered;
     }
 
-    // 套用過濾條件並重新渲染
     function applyFiltersAndRender() {
         const filteredData = getFilteredRecords();
         renderList(filteredData);
         updateFilterButtonsUI();
     }
 
-    // 更新過濾器按鈕樣式 (狀態 + 分類)
     function updateFilterButtonsUI() {
-        // 狀態按鈕
         const statusBtns = [
             { id: 'filterStatusAll', value: 'all' },
             { id: 'filterStatusActive', value: 'active' },
@@ -641,7 +620,6 @@
                 else btn.classList.remove('active');
             }
         });
-        // 分類按鈕
         const catBtns = [
             { id: 'filterCatAll', value: 'all' },
             { id: 'filterCatHappy', value: '開心' },
@@ -659,8 +637,7 @@
         });
     }
 
-    // 新增心情打卡
-    function handleAddMood() {
+    async function handleAddMood() {
         const content = contentTextarea.value.trim();
         if (!content) {
             alert('請填寫今天的心情描述～ 留下溫暖的文字吧！');
@@ -670,10 +647,12 @@
         const note = noteInput.value;
         const newRecord = createRecord({ content, category, note });
         saveData(newRecord);
-        // 清空表單
+        
+        // Sync to sheet
+        await syncToSheet({ action: "create", record: newRecord });
+        
         contentTextarea.value = '';
         noteInput.value = '';
-        // 為了讓新增打卡立刻顯示在最上方，將過濾器重置為「全部/全部」
         if (currentStatusFilter !== 'all' || currentCategoryFilter !== 'all') {
             currentStatusFilter = 'all';
             currentCategoryFilter = 'all';
@@ -682,9 +661,7 @@
         applyFiltersAndRender();
     }
 
-    // 初始化過濾器事件監聽
     function initFilters() {
-        // 狀態過濾器
         const allStatus = document.getElementById('filterStatusAll');
         const activeStatus = document.getElementById('filterStatusActive');
         const doneStatus = document.getElementById('filterStatusDone');
@@ -704,7 +681,6 @@
             applyFiltersAndRender();
         });
 
-        // 分類過濾器
         const catAll = document.getElementById('filterCatAll');
         const catHappy = document.getElementById('filterCatHappy');
         const catCalm = document.getElementById('filterCatCalm');
@@ -743,12 +719,16 @@
         });
     }
 
-    // 啟動系統
-    function init() {
-        loadData();                   // 讀取 localStorage
-        initFilters();               // 綁定過濾器事件
+    async function init() {
+        try {
+            records = await fetchRecordsFromSheet();
+            persistToLocalStorage();
+        } catch (error) {
+            console.warn("Falling back to localStorage:", error.message);
+            loadData();
+        }
+        initFilters();
         submitBtn.addEventListener('click', handleAddMood);
-        // 預設過濾器全部
         currentStatusFilter = 'all';
         currentCategoryFilter = 'all';
         updateFilterButtonsUI();
